@@ -15,6 +15,8 @@ import time
 import traceback
 import yaml
 import uuid
+import os
+import io
 from base64 import b64encode
 from celery import Celery
 from datetime import datetime, timedelta
@@ -26,7 +28,7 @@ from os import getenv, listdir, makedirs, mkdir, path, remove, rename, statvfs, 
 from subprocess import check_output
 from urlparse import urlparse
 
-from flask import Flask, escape, make_response, render_template, request, send_from_directory, url_for, jsonify
+from flask import Flask, escape, make_response, render_template, request, send_from_directory, url_for, jsonify, send_file
 from flask_cors import CORS
 from flask_restful_swagger_2 import Api, Resource, Schema, swagger
 from flask_swagger_ui import get_swaggerui_blueprint
@@ -450,9 +452,10 @@ def prepare_asset(request, unique_name=False):
 
     if not asset['asset_id']:
         asset['asset_id'] = uuid.uuid4().hex
-        if uri.startswith('/'):
-            rename(uri, path.join(settings['assetdir'], asset['asset_id']))
-            uri = path.join(settings['assetdir'], asset['asset_id'])
+        
+    if uri.startswith('/'):
+        rename(uri, path.join(settings['assetdir'], asset['asset_id']))
+        uri = path.join(settings['assetdir'], asset['asset_id'])
 
     if 'youtube_asset' in asset['mimetype']:
         uri, asset['name'], asset['duration'] = download_video_from_youtube(uri, asset['asset_id'])
@@ -705,7 +708,6 @@ class Assets(Resource):
                 'schema': {
                     'type': 'array',
                     'items': AssetModel
-
                 }
             }
         }
@@ -862,7 +864,6 @@ class AssetsV1_1(Resource):
                 'schema': {
                     'type': 'array',
                     'items': AssetModel
-
                 }
             }
         }
@@ -957,7 +958,6 @@ class AssetV1_1(Resource):
                 'in': 'path',
                 'description': 'id of an asset',
                 'required': True
-
             },
         ],
         'responses': {
@@ -1152,7 +1152,6 @@ class AssetV1_2(Resource):
                 'in': 'path',
                 'description': 'id of an asset',
                 'required': True
-
             },
         ],
         'responses': {
@@ -1519,9 +1518,7 @@ class AssetContent(Resource):
                 'description':
                     '''
                     The content of the asset.
-
                     'type' can either be 'file' or 'url'.
-
                     In case of a file, the fields 'mimetype', 'filename', and 'content'  will be present.
                     In case of a URL, the field 'url' will be present.
                     ''',
@@ -1588,6 +1585,56 @@ class ViewerCurrentAsset(Resource):
             return assets_helper.read(conn, current_asset_id)
 
 
+class Screenshot(Resource):
+    method_decorators = [authorized]
+
+    def get(self):
+        try:
+            scr = self.take_screenshot()
+            if scr is not None:
+                return scr
+            return "No screenshot was taken", 500
+        except:
+            return "Error trying to take screenshot, check if raspi2png is installed.", 500
+
+
+    def take_screenshot(self):
+        if os.path.exists("screenshot.png"):
+            os.unlink("screenshot.png")
+
+        os.system("raspi2png -p screenshot.png")
+        if os.path.exists("screenshot.png"):
+            with open("screenshot.png", 'rb') as img_file:
+                return send_file(
+                        io.BytesIO(img_file.read()),
+                        attachment_filename='monitor.png',
+                        mimetype='image/png'
+                )
+
+
+class DisplayControl(Resource):
+    method_decorators = [authorized]
+
+    def get(self, status, option):
+        try:
+            return self.turn_on_off_monitor(status, option)
+        except:
+            return "Error trying to turn on/off the display.", 500
+
+
+    def turn_on_off_monitor(self, status, option): 
+        if option == 0:
+            os.system("vcgencmd display_power {}".format(status))
+        elif option == 1:
+            if status == 0:
+                status = "--off"
+            else:
+                status = "--preferred"
+            os.system("tvservice {}".format(status))
+        
+        return '', 200
+
+
 api.add_resource(Assets, '/api/v1/assets')
 api.add_resource(Asset, '/api/v1/assets/<asset_id>')
 api.add_resource(AssetsV1_1, '/api/v1.1/assets')
@@ -1607,6 +1654,8 @@ api.add_resource(UpgradeScreenly, '/api/v1/upgrade_screenly')
 api.add_resource(RebootScreenly, '/api/v1/reboot_screenly')
 api.add_resource(ShutdownScreenly, '/api/v1/shutdown_screenly')
 api.add_resource(ViewerCurrentAsset, '/api/v1/viewer_current_asset')
+api.add_resource(Screenshot, '/api/v1/screenshot')
+api.add_resource(DisplayControl, '/api/v1/display/<status>/<option>')
 
 try:
     my_ip = get_node_ip()
